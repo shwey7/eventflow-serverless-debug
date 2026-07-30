@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EventFlow - Serverless event registration pipeline.
+  API Gateway -> Lambda -> DynamoDB -> SNS.
+  NOTE: This template ships with an intentional bug for a troubleshooting
+  exercise. See README.md for details. Do not "fix" it before starting
+  the reproduction steps.
+
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Email address to subscribe to the confirmation topic (you will need to confirm the SNS subscription via email after deploy)
+
+Resources:
+
+  RegistrationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: EventFlow-Registrations
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: registrationId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: registrationId
+          KeyType: HASH
+
+  ConfirmationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: EventFlow-Confirmations
+
+  ConfirmationSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref ConfirmationTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  RegistrationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: EventFlow-RegistrationLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventFlow-DynamoWriteAndLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt RegistrationsTable.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+
+  RegistrationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: EventFlow-RegistrationHandler
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt RegistrationLambdaRole.Arn
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref RegistrationsTable
+          TOPIC_ARN: !Ref ConfirmationTopic
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 501, "body": "Not deployed yet"}
+
+  RegistrationFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RegistrationFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RegistrationApi}/*/*
+
+  RegistrationApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: EventFlow-API
+
+  RegisterResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RegistrationApi
+      ParentId: !GetAtt RegistrationApi.RootResourceId
+      PathPart: register
+
+  RegisterMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RegistrationApi
+      ResourceId: !Ref RegisterResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RegistrationFunction.Arn}/invocations
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: RegisterMethod
+    Properties:
+      RestApiId: !Ref RegistrationApi
+      StageName: prod
+
+Outputs:
+  ApiEndpoint:
+    Description: Invoke URL for the registration endpoint
+    Value: !Sub https://${RegistrationApi}.execute-api.${AWS::Region}.amazonaws.com/prod/register
+  TableName:
+    Value: !Ref RegistrationsTable
+  TopicArn:
+    Value: !Ref ConfirmationTopic
+  LambdaFunctionName:
+    Value: !Ref RegistrationFunction
