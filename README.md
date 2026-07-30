@@ -1,4 +1,4 @@
-# EventFlow - Debugging a Silent Serverless Failure
+# EventFlow - Debugging a Serverless Pipeline Failure
 
 ## Overview
 EventFlow is a serverless event-registration pipeline: API Gateway receives
@@ -107,4 +107,4 @@ CloudFormation, AWS CLI, git/GitHub
 ```bash
 aws cloudformation delete-stack --stack-name eventflow --region us-east-1
 ```
-Confirmed no orphaned resources remained after deletion.
+
